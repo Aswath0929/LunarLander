@@ -1,0 +1,175 @@
+import gymnasium as gym
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import random
+from collections import deque
+import matplotlib.pyplot as plt
+import time
+
+# Set random seeds for reproducibility
+torch.manual_seed(42)
+np.random.seed(42)
+random.seed(42)
+
+# Define the DQN model (lightweight)
+class DQN(nn.Module):
+    def __init__(self, state_size, action_size):
+        super(DQN, self).__init__()
+        self.fc1 = nn.Linear(state_size, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(64, action_size)
+
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        return self.fc3(x)
+
+# Experience replay buffer
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.buffer = deque(maxlen=capacity)
+
+    def push(self, state, action, reward, next_state, done):
+        self.buffer.append((state, action, reward, next_state, done))
+
+    def sample(self, batch_size):
+        batch = random.sample(self.buffer, batch_size)
+        state, action, reward, next_state, done = zip(*batch)
+        return np.array(state), action, reward, np.array(next_state), done
+
+    def __len__(self):
+        return len(self.buffer)
+
+# DQN Agent definition
+class DQNAgent:
+    def __init__(self, state_size, action_size):
+        self.state_size = state_size
+        self.action_size = action_size
+        self.memory = ReplayBuffer(10000)
+        self.gamma = 0.99
+        self.epsilon = 1.0
+        self.epsilon_min = 0.01
+        self.epsilon_decay = 0.999
+        self.learning_rate = 0.001
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.model = DQN(state_size, action_size).to(self.device)
+        self.target_model = DQN(state_size, action_size).to(self.device)
+        self.update_target_model()
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        self.criterion = nn.MSELoss()
+
+    def update_target_model(self):
+        self.target_model.load_state_dict(self.model.state_dict())
+
+    def act(self, state):
+        if random.random() <= self.epsilon:
+            return random.randrange(self.action_size)
+        state = torch.FloatTensor(state).to(self.device)
+        with torch.no_grad():
+            q_values = self.model(state)
+        return torch.argmax(q_values).item()
+
+    def train(self, batch_size):
+        if len(self.memory) < batch_size:
+            return
+        states, actions, rewards, next_states, dones = self.memory.sample(batch_size)
+
+        states = torch.FloatTensor(states).to(self.device)
+        actions = torch.LongTensor(actions).to(self.device)
+        rewards = torch.FloatTensor(rewards).to(self.device)
+        next_states = torch.FloatTensor(next_states).to(self.device)
+        dones = torch.FloatTensor(dones).to(self.device)
+
+        current_q = self.model(states).gather(1, actions.unsqueeze(1)).squeeze()
+        next_q = self.target_model(next_states).max(1)[0]
+        target_q = rewards + self.gamma * next_q * (1 - dones)
+
+        loss = self.criterion(current_q, target_q.detach())
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        if self.epsilon > self.epsilon_min:
+            self.epsilon *= self.epsilon_decay
+
+# Training loop
+def train_dqn(episodes=500):
+    env = gym.make("LunarLander-v3")
+    state_size = env.observation_space.shape[0]
+    action_size = env.action_space.n
+    agent = DQNAgent(state_size, action_size)
+    batch_size = 64
+    rewards = []
+
+    for episode in range(episodes):
+        state, _ = env.reset()
+        total_reward = 0
+        done = False
+        step = 0
+
+        while not done:
+            action = agent.act(state)
+            next_state, reward, terminated, truncated, _ = env.step(action)
+            done = terminated or truncated
+            agent.memory.push(state, action, reward, next_state, done)
+            state = next_state
+            total_reward += reward
+            step += 1
+
+            if step % 4 == 0:
+                agent.train(batch_size)
+
+        if episode % 10 == 0:
+            agent.update_target_model()
+
+        rewards.append(total_reward)
+
+        if episode % 50 == 0:
+            avg = np.mean(rewards[-50:])
+            print(f"Episode {episode:4d} | Avg Reward: {avg:.2f} | Epsilon: {agent.epsilon:.3f}")
+
+    env.close()
+    return agent, rewards
+
+# Run simulation using trained agent
+def run_final_simulation(agent):
+    env = gym.make("LunarLander-v3", render_mode="human")
+    state, _ = env.reset()
+    done = False
+    total_reward = 0
+    time.sleep(2)
+
+    while not done:
+        env.render()
+        time.sleep(0.01)
+        action = agent.act(state)
+        state, reward, terminated, truncated, _ = env.step(action)
+        done = terminated or truncated
+        total_reward += reward
+
+    print(f"\nFinal Simulation Reward: {total_reward:.2f}")
+    time.sleep(2)
+    env.close()
+
+# Reward plot
+def plot_rewards(rewards):
+    plt.figure(figsize=(10, 5))
+    plt.plot(rewards, label='Episode Reward')
+    plt.plot(np.convolve(rewards, np.ones(50)/50, mode='valid'), label='Smoothed (50 ep)')
+    plt.xlabel('Episode')
+    plt.ylabel('Reward')
+    plt.title('LunarLander-v3 DQN Training Progress')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("lunar_lander_rewards.png")
+    plt.show()
+
+# Main function
+if __name__ == "__main__":
+    agent, rewards = train_dqn(episodes=1000)
+    plot_rewards(rewards)
+    run_final_simulation(agent)
