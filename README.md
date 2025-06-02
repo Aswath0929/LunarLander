@@ -8,5 +8,6 @@ Train a model in Lunar Lander environment to optimise landing procedure.
 - Real-time simulation visualization
 - Lightweight and beginner-friendly PyTorch implementation
 
+![image](https://github.com/user-attachments/assets/2cfe4d80-813d-444a-85a9-d89ae2357b7b)
 
 
